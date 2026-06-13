@@ -41,19 +41,45 @@ const ACTIVE_KEY = "va_active_provider_v1";
 //   openai    = OpenAI Chat Completions(GPT/豆包/DeepSeek/通义/任何 openai 兼容接口)
 //   gemini    = Google Gemini generateContent
 const PROVIDER_PRESETS = [
-  { id:"claude",  label:"Claude",  type:"anthropic", baseUrl:"https://api.anthropic.com/v1/messages",                    model:"claude-sonnet-4-20250514",          apiKey:"" },
-  { id:"gpt4o",   label:"GPT-4o",  type:"openai",    baseUrl:"https://api.openai.com/v1/chat/completions",                model:"gpt-4o",                            apiKey:"" },
-  { id:"gemini",  label:"Gemini",  type:"gemini",    baseUrl:"https://generativelanguage.googleapis.com/v1beta",          model:"gemini-2.0-flash",                  apiKey:"" },
-  { id:"doubao",  label:"豆包",    type:"openai",    baseUrl:"https://ark.cn-beijing.volces.com/api/v3/chat/completions", model:"doubao-1.5-vision-pro-32k-250115",  apiKey:"" },
+  { id:"claude",  label:"Claude",  type:"anthropic", baseUrl:"https://api.anthropic.com/v1/messages",                    model:"claude-sonnet-4-20250514",          apiKey:"", viaProxy:false },
+  { id:"gpt4o",   label:"GPT-4o",  type:"openai",    baseUrl:"https://api.openai.com/v1/chat/completions",                model:"gpt-4o",                            apiKey:"", viaProxy:false },
+  { id:"gemini",  label:"Gemini",  type:"gemini",    baseUrl:"https://generativelanguage.googleapis.com/v1beta",          model:"gemini-2.0-flash",                  apiKey:"", viaProxy:false },
+  { id:"doubao",  label:"豆包",    type:"openai",    baseUrl:"https://ark.cn-beijing.volces.com/api/v3/chat/completions", model:"doubao-1.5-vision-pro-32k-250115",  apiKey:"", viaProxy:true  },
 ];
 
 function loadProviders() {
-  try { const s = typeof localStorage!=="undefined" && localStorage.getItem(PROVIDER_KEY); if (s) return JSON.parse(s); } catch(e){}
+  try {
+    const s = typeof localStorage!=="undefined" && localStorage.getItem(PROVIDER_KEY);
+    if (s) {
+      const saved = JSON.parse(s);
+      // 迁移:为旧记录补上缺失的字段(老用户 localStorage 里可能没有 viaProxy)
+      return saved.map(p => {
+        const preset = PROVIDER_PRESETS.find(x => x.id === p.id);
+        return { viaProxy: preset?.viaProxy ?? false, ...p };
+      });
+    }
+  } catch(e){}
   return PROVIDER_PRESETS.map(p => ({...p}));
 }
 function saveProviders(list) { try { localStorage.setItem(PROVIDER_KEY, JSON.stringify(list)); } catch(e){} }
 function loadActiveId() { try { return localStorage.getItem(ACTIVE_KEY) || "claude"; } catch(e){ return "claude"; } }
 function saveActiveId(id) { try { localStorage.setItem(ACTIVE_KEY, id); } catch(e){} }
+
+// 通用 fetch 包装:若 provider.viaProxy 为真,走 /api/ai-proxy 服务端代理;否则浏览器直调
+async function fetchAI(provider, url, headers, body) {
+  if (provider.viaProxy) {
+    return fetch("/api/ai-proxy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, headers, body }),
+    });
+  }
+  return fetch(url, {
+    method: "POST",
+    headers,
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+}
 
 // 通用调用入口:根据 provider.type 走不同格式,返回纯文本(JSON 字符串)
 async function callVisionAPI(provider, base64, mediaType, systemText, maxTokens) {
@@ -62,28 +88,24 @@ async function callVisionAPI(provider, base64, mediaType, systemText, maxTokens)
   if (!apiKey || !apiKey.trim()) throw new Error(`「${label}」的 API Key 未填写,请到右上角「接口」配置`);
 
   if (type === "anthropic") {
-    const r = await fetch(baseUrl, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" },
-      body: JSON.stringify({ model, max_tokens:maxTokens, messages:[{ role:"user", content:[
-        { type:"image", source:{ type:"base64", media_type:mediaType, data:base64 } },
-        { type:"text", text:systemText },
-      ]}]}),
-    });
+    const headers = { "Content-Type":"application/json", "x-api-key":apiKey, "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" };
+    const body = { model, max_tokens:maxTokens, messages:[{ role:"user", content:[
+      { type:"image", source:{ type:"base64", media_type:mediaType, data:base64 } },
+      { type:"text", text:systemText },
+    ]}]};
+    const r = await fetchAI(provider, baseUrl, headers, body);
     const d = await r.json();
     if (d.error) throw new Error(`[${label}] ${d.error.message || JSON.stringify(d.error)}`);
     return (d.content||[]).map(i=>i.text||"").join("\n");
   }
 
   if (type === "openai") {
-    const r = await fetch(baseUrl, {
-      method:"POST",
-      headers:{ "Content-Type":"application/json", "Authorization":`Bearer ${apiKey}` },
-      body: JSON.stringify({ model, max_tokens:maxTokens, messages:[{ role:"user", content:[
-        { type:"text", text:systemText },
-        { type:"image_url", image_url:{ url:`data:${mediaType};base64,${base64}` } },
-      ]}]}),
-    });
+    const headers = { "Content-Type":"application/json", "Authorization":`Bearer ${apiKey}` };
+    const body = { model, max_tokens:maxTokens, messages:[{ role:"user", content:[
+      { type:"text", text:systemText },
+      { type:"image_url", image_url:{ url:`data:${mediaType};base64,${base64}` } },
+    ]}]};
+    const r = await fetchAI(provider, baseUrl, headers, body);
     const d = await r.json();
     if (d.error) throw new Error(`[${label}] ${d.error.message || JSON.stringify(d.error)}`);
     return d.choices?.[0]?.message?.content || "";
@@ -91,16 +113,15 @@ async function callVisionAPI(provider, base64, mediaType, systemText, maxTokens)
 
   if (type === "gemini") {
     const url = `${baseUrl.replace(/\/$/,"")}/models/${model}:generateContent?key=${apiKey}`;
-    const r = await fetch(url, {
-      method:"POST", headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({
-        contents:[{ parts:[
-          { text: systemText },
-          { inline_data:{ mime_type: mediaType, data: base64 } },
-        ]}],
-        generationConfig:{ maxOutputTokens: maxTokens, responseMimeType:"application/json" },
-      }),
-    });
+    const headers = { "Content-Type":"application/json" };
+    const body = {
+      contents:[{ parts:[
+        { text: systemText },
+        { inline_data:{ mime_type: mediaType, data: base64 } },
+      ]}],
+      generationConfig:{ maxOutputTokens: maxTokens, responseMimeType:"application/json" },
+    };
+    const r = await fetchAI(provider, url, headers, body);
     const d = await r.json();
     if (d.error) throw new Error(`[${label}] ${d.error.message || JSON.stringify(d.error)}`);
     return d.candidates?.[0]?.content?.parts?.map(p=>p.text||"").join("") || "";
@@ -1062,6 +1083,16 @@ function SettingsPanel({ providers, activeId, onChange, onClose }) {
                     <Field label="模型" value={p.model} onChange={v=>updateField(p.id,"model",v)}
                       hint="如 claude-sonnet-4-20250514 / gpt-4o / gemini-2.0-flash / doubao-1.5-vision-pro-32k-250115" />
                     <Field label="API Key" value={p.apiKey} onChange={v=>updateField(p.id,"apiKey",v)} type="password" />
+                    <div style={{ marginTop:14, display:"flex", alignItems:"flex-start", gap:10, padding:"10px 12px", background:p.viaProxy?C.accentSoft:C.bg, border:`1px solid ${C.line}`, borderRadius:8 }}>
+                      <input type="checkbox" checked={!!p.viaProxy} onChange={e=>updateField(p.id,"viaProxy",e.target.checked)}
+                        style={{ marginTop:2, accentColor:C.accent, cursor:"pointer" }} id={`proxy-${p.id}`} />
+                      <label htmlFor={`proxy-${p.id}`} style={{ flex:1, cursor:"pointer" }}>
+                        <div style={{ fontFamily:sans, fontSize:13, color:C.txt }}>走服务端代理(解决 CORS)</div>
+                        <div style={{ fontFamily:sans, fontSize:11, color:C.faint, marginTop:3, lineHeight:1.5 }}>
+                          浏览器报 "Failed to fetch" 或 CORS 错误时打开。需要项目里有 /api/ai-proxy 路由(本项目已自带)。豆包 / 国内大部分接口建议开;Claude/GPT/Gemini 通常无需。
+                        </div>
+                      </label>
+                    </div>
                   </div>
                 )}
               </div>
