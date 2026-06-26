@@ -5,7 +5,7 @@ const DEFAULT_MODEL = "doubao-1.5-vision-pro-32k-250115";
 
 export async function POST(request) {
   try {
-    const apiKey = process.env.DOUBAO_API_KEY;
+    const apiKey = (process.env.DOUBAO_API_KEY || "").replace(/\s/g, "");
     if (!apiKey) {
       return Response.json(
         { error: "服务端缺少 DOUBAO_API_KEY,请在 .env.local 或 Vercel 环境变量中配置。" },
