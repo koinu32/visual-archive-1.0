@@ -18,7 +18,7 @@ export async function POST(request) {
   }
 
   const mediaType = body.mediaType || "image/jpeg";
-  const model = process.env.DOUBAO_MODEL || body.model || DEFAULT_MODEL;
+  const model = body.model || process.env.DOUBAO_MODEL || DEFAULT_MODEL;
   const baseUrl = process.env.DOUBAO_BASE_URL || DEFAULT_BASE_URL;
 
   const upstream = await fetch(baseUrl, {
