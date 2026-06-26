@@ -61,7 +61,7 @@ function loadProviders() {
         const savedById = new Map(saved.map(p => [p.id, p]));
         const mergedPresets = PROVIDER_PRESETS.map(p => {
           const old = savedById.get(p.id);
-          return old ? { ...p, apiKey:old.apiKey || p.apiKey } : { ...p };
+          return old ? { ...p, ...old } : { ...p };
         });
         const custom = saved.filter(p => !presets.has(p.id));
         return [...mergedPresets, ...custom];
