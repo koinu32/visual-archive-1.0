@@ -85,11 +85,16 @@ async function callVisionAPI(provider, base64, mediaType, systemText, maxTokens)
   const { type, baseUrl, model, apiKey, label } = provider;
 
   if (type === "server-openai") {
-    const r = await fetch(baseUrl || "/api/vision", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ model, max_tokens:maxTokens, systemText, base64, mediaType }),
-    });
+    let r;
+    try {
+      r = await fetch(baseUrl || "/api/vision", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ model, max_tokens:maxTokens, systemText, base64, mediaType }),
+      });
+    } catch (e) {
+      throw new Error(`[${label}] 无法连接服务端代理。请确认已部署最新代码,或换一张更小的图片重试。${e?.message ? `(${e.message})` : ""}`);
+    }
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.error) throw new Error(`[${label}] ${d.error || `HTTP ${r.status}`}`);
     return d.content || "";
@@ -242,7 +247,8 @@ export default function App() {
     setStep("compress");
     const { dataUrl } = await fileToBase64(file);
     const blob = await compressImage(dataUrl, 1200, 0.7);
-    const base64 = await blobToBase64(blob);
+    const analysisBlob = await compressImage(dataUrl, 768, 0.55);
+    const base64 = await blobToBase64(analysisBlob);
     setStep("analyze");
     const analysis = await analyzeImageFast(base64, "image/jpeg", media, activeProvider);
     const aiM = analysis.media || { zh:"未分类", en:"Uncategorized" };
